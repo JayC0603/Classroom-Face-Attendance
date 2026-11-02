@@ -1,5 +1,7 @@
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from threading import RLock
 from typing import Protocol
 from uuid import uuid4
 
@@ -37,7 +39,9 @@ class ModelRepository(Protocol):
     def list_definitions(self) -> list[ModelDefinition]: ...
     def put_artifact(self, artifact: ModelArtifact) -> None: ...
     def get_artifact(self, artifact_id: str) -> ModelArtifact | None: ...
+    def list_artifacts(self) -> list[ModelArtifact]: ...
     def put_version(self, version: ModelVersion) -> None: ...
+    def put_artifact_and_version(self, artifact: ModelArtifact, version: ModelVersion) -> None: ...
     def get_version(self, version_id: str) -> ModelVersion | None: ...
     def list_versions(self, definition_id: str) -> list[ModelVersion]: ...
     def delete_version(self, version_id: str) -> None: ...
@@ -55,6 +59,7 @@ class InMemoryModelRepository:
         self.versions: dict[str, ModelVersion] = {}
         self.deployments: dict[str, ModelDeployment] = {}
         self.assignments: dict[ModelType, str] = {}
+        self._lock = RLock()
 
     def put_definition(self, definition: ModelDefinition) -> None:
         self.definitions[definition.id] = definition
@@ -71,8 +76,20 @@ class InMemoryModelRepository:
     def get_artifact(self, artifact_id: str) -> ModelArtifact | None:
         return self.artifacts.get(artifact_id)
 
+    def list_artifacts(self) -> list[ModelArtifact]:
+        return list(self.artifacts.values())
+
     def put_version(self, version: ModelVersion) -> None:
         self.versions[version.id] = version
+
+    def put_artifact_and_version(self, artifact: ModelArtifact, version: ModelVersion) -> None:
+        with self._lock:
+            if version.artifact_id != artifact.id:
+                raise ValueError("ARTIFACT_VERSION_MISMATCH")
+            if artifact.id in self.artifacts or version.id in self.versions:
+                raise ValueError("MODEL_VERSION_EXISTS")
+            self.artifacts[artifact.id] = artifact
+            self.versions[version.id] = version
 
     def get_version(self, version_id: str) -> ModelVersion | None:
         return self.versions.get(version_id)
@@ -84,7 +101,17 @@ class InMemoryModelRepository:
         )
 
     def delete_version(self, version_id: str) -> None:
-        del self.versions[version_id]
+        with self._lock:
+            related = [d for d in self.deployments.values() if d.model_version_id == version_id]
+            if any(
+                d.id in self.assignments.values()
+                or d.status in {DeploymentStatus.ACTIVE, DeploymentStatus.ACTIVATION_PENDING}
+                for d in related
+            ):
+                raise ValueError("ARTIFACT_IN_USE")
+            for deployment in related:
+                del self.deployments[deployment.id]
+            del self.versions[version_id]
 
     def put_deployment(self, deployment: ModelDeployment) -> None:
         self.deployments[deployment.id] = deployment
@@ -173,8 +200,15 @@ class ModelRegistryService:
             None,
             datetime.now(UTC).isoformat(),
         )
-        self.repository.put_artifact(artifact)
-        self.repository.put_version(version)
+        try:
+            self.repository.put_artifact_and_version(artifact, version)
+        except Exception:
+            try:
+                self._ingestor.delete(artifact.storage_key)
+            except Exception:
+                # Metadata failed; preserve that error and allow later orphan cleanup.
+                pass
+            raise
         return version
 
     def list_versions(self, definition_id: str) -> list[ModelVersion]:
@@ -289,11 +323,43 @@ class ModelRegistryService:
             item
             for item in self.repository.list_deployments()
             if item.model_version_id == version.id
-            and item.status in {DeploymentStatus.ACTIVE, DeploymentStatus.ACTIVATION_PENDING}
+            and (
+                item.status in {DeploymentStatus.ACTIVE, DeploymentStatus.ACTIVATION_PENDING}
+                or item.id in self.repository.list_assignments().values()
+            )
         ]
         if referenced:
             raise ValueError("ARTIFACT_IN_USE")
         self.repository.delete_version(version_id)
+
+    def update_person_version(
+        self, version_id: str, label: str, confidence: float | None = None
+    ) -> ModelVersion:
+        version = self.get_version(version_id)
+        if version.manifest.model_type is not ModelType.PERSON_DETECTOR:
+            raise KeyError(version_id)
+        label = label.strip()
+        if not label or len(label) > 80:
+            raise ValueError("INVALID_VERSION_LABEL")
+        if any(
+            v.id != version_id and v.version == label
+            for v in self.repository.list_versions(version.model_definition_id)
+        ):
+            raise ValueError("MODEL_VERSION_EXISTS")
+        manifest = version.manifest
+        if confidence is not None and confidence != manifest.metadata.get(
+            "confidence_threshold", 0.25
+        ):
+            if not 0.01 <= confidence <= 1:
+                raise ValueError("INVALID_CONFIDENCE")
+            if any(d.model_version_id == version_id for d in self.repository.list_deployments()):
+                raise ValueError("MODEL_PROFILE_IMMUTABLE_AFTER_DEPLOYMENT")
+            data = manifest.model_dump(mode="json")
+            data["metadata"]["confidence_threshold"] = confidence
+            manifest = ModelManifest.model_validate(data)
+        updated = replace(version, version=label, manifest=manifest)
+        self.repository.put_version(updated)
+        return updated
 
     def list_deployments(self) -> list[ModelDeployment]:
         return self.repository.list_deployments()
@@ -353,6 +419,8 @@ class ModelRegistryService:
         reasons = [f"{item}_NOT_ASSIGNED" for item in missing]
         if self._vector_index_status != "ACTIVE":
             reasons.append(f"VECTOR_INDEX_{self._vector_index_status}")
+        # Assignment is control-plane intent, not a functioning recognition pipeline.
+        reasons.append("FACE_RECOGNITION_PIPELINE_NOT_IMPLEMENTED")
         return {
             "status": "READY" if not reasons else "NOT_READY",
             "reasons": reasons,
@@ -371,5 +439,16 @@ class ModelRegistryService:
             "deployment": deployment,
             "version": version,
             "definition": definition,
-            "artifact": artifact,
+            "artifact": {
+                "id": artifact.id,
+                "checksum": artifact.checksum,
+                "size_bytes": artifact.size_bytes,
+                "content_url": (f"/api/v1/internal/model-artifacts/{artifact.id}/content"),
+            },
         }
+
+    def artifact_content(self, artifact_id: str) -> Iterator[bytes]:
+        artifact = self.repository.get_artifact(artifact_id)
+        if artifact is None:
+            raise KeyError(artifact_id)
+        return self._ingestor.iter_bytes(artifact.storage_key)

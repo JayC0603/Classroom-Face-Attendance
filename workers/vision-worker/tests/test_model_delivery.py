@@ -1,8 +1,11 @@
+from contextlib import contextmanager
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
 from fr_domain.model_management import DeploymentBackend, ModelType
 from vision_worker.model_delivery import (
+    HttpDeploymentProvider,
     ModelDeploymentSynchronizer,
     PendingModelDeployment,
     UnavailableProductionAdapterFactory,
@@ -113,3 +116,119 @@ def test_failed_replacement_keeps_previous_runtime(tmp_path: Path) -> None:
     synchronizer.sync_once()
     assert synchronizer.active_models.active(ModelType.PERSON_DETECTOR) is first
     assert replacement_provider.results[0]["success"] is False
+
+
+def _deployment_payload(checksum: str, size: int) -> dict[str, object]:
+    from test_model_domain import person_manifest
+
+    return {
+        "deployment": {
+            "id": "deployment-remote",
+            "backend": "ONNX_CPU",
+            "precision": "FP32",
+            "revision": "revision-1",
+        },
+        "definition": {"id": "definition-1", "model_type": "PERSON_DETECTOR"},
+        "version": {
+            "id": "version-1",
+            "version": "v1",
+            "manifest": person_manifest().model_dump(mode="json"),
+        },
+        "artifact": {
+            "id": "artifact-1",
+            "checksum": checksum,
+            "size_bytes": size,
+            "content_url": "/api/v1/internal/model-artifacts/artifact-1/content",
+        },
+    }
+
+
+class FakeHttpResponse:
+    status_code = 200
+
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> object:
+        return self._payload
+
+    def iter_bytes(self, chunk_size: int):
+        assert chunk_size <= 1024 * 1024
+        yield self._payload
+
+
+def _configure_http(
+    monkeypatch, payload: dict[str, object], body: bytes, requests: list[str]
+) -> None:
+    import httpx
+
+    monkeypatch.setattr(
+        httpx, "get", lambda *_args, **_kwargs: FakeHttpResponse({"items": [payload]})
+    )
+
+    @contextmanager
+    def stream(_method, url, **_kwargs):
+        requests.append(url)
+        yield FakeHttpResponse(body)
+
+    monkeypatch.setattr(httpx, "stream", stream)
+
+
+def test_worker_download_verifies_checksum_before_cache_replace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    expected = b"good model"
+    payload = _deployment_payload(sha256(expected).hexdigest(), len(expected))
+    requests: list[str] = []
+    _configure_http(monkeypatch, payload, b"evil model", requests)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cached = cache / f"{sha256(expected).hexdigest()}.onnx"
+    cached.write_bytes(b"previous cache bytes")
+    provider = HttpDeploymentProvider("http://api.local", "worker", artifact_cache_dir=cache)
+
+    deployment = provider.pending()[0]
+
+    assert deployment.delivery_error == "CHECKSUM_MISMATCH"
+    assert cached.read_bytes() == b"previous cache bytes"
+    assert len(requests) == 1
+
+
+def test_worker_download_reuses_matching_checksum_cache(tmp_path: Path, monkeypatch) -> None:
+    content = b"good model"
+    checksum = sha256(content).hexdigest()
+    payload = _deployment_payload(checksum, len(content))
+    requests: list[str] = []
+    _configure_http(monkeypatch, payload, content, requests)
+    provider = HttpDeploymentProvider(
+        "http://api.local", "worker", artifact_cache_dir=tmp_path / "cache"
+    )
+
+    first = provider.pending()[0]
+    second = provider.pending()[0]
+
+    assert first.artifact_path == second.artifact_path
+    assert first.artifact_path.read_bytes() == content
+    assert len(requests) == 1
+
+
+def test_download_failure_preserves_previously_active_runtime(tmp_path: Path) -> None:
+    artifact = tmp_path / "model.onnx"
+    artifact.write_bytes(b"controlled")
+    first_provider = Provider(pending(artifact))
+    first = Runtime("deployment-old")
+    synchronizer = ModelDeploymentSynchronizer(
+        first_provider, RuntimeCapabilities.cpu_only(), Factory(first)
+    )
+    synchronizer.sync_once()
+    failed_provider = Provider(replace(pending(artifact), delivery_error="CHECKSUM_MISMATCH"))
+    synchronizer._provider = failed_provider
+
+    synchronizer.sync_once()
+
+    assert synchronizer.active_models.active(ModelType.PERSON_DETECTOR) is first
+    assert failed_provider.results[0]["success"] is False
+    assert failed_provider.results[0]["error_category"] == "CHECKSUM_MISMATCH"

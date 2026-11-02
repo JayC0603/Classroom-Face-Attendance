@@ -10,8 +10,12 @@ build/
 node_modules/
 apps/web/dist/
 .env
+.env*.local
 data/
 artifacts/
 .superpowers/
 .tools/
 .test-tmp/
+.pytest-m3-audit-*/
+.pytest-*/
+.runtime/

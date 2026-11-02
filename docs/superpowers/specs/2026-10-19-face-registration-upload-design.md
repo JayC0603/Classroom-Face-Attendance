@@ -1,7 +1,7 @@
 # Face registration upload
 
 Date: 2026-10-19
-Status: proposed written specification; initial in-chat scope approved.
+Status: implemented image-intake increment; see implementation plan for validation.
 
 ## Intended outcome
 
@@ -15,9 +15,15 @@ face models or active vector index. Saving an image must therefore display
 
 This increment delivers durable identity and image intake. It does not implement
 embedding generation, processing jobs, automatic reprocessing, FAISS activation,
-camera capture, unknown review, or recognition. These remain separate milestones.
+RTSP camera capture, unknown review, or recognition. These remain separate milestones.
 Pending uploads must remain pending even if models are configured later until a
 real processing implementation is available. The UI explains this limitation.
+
+Follow-up requested on 2026-10-19: browser webcam is an additional intake source.
+The operator chooses file upload or webcam, explicitly enables the camera, captures
+JPEG previews, then saves. Webcam images are tagged CAMERA_CAPTURE; all processing
+states stay pending. Media tracks stop on source/person changes, save, and unmount;
+late permission grants are released. Camera access requires localhost or HTTPS.
 
 ## Existing boundaries
 

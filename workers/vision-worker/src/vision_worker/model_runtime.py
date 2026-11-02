@@ -41,7 +41,13 @@ class InferenceRuntimeResolver:
         requested: DeploymentBackend,
         artifacts: ModelArtifacts,
         capabilities: RuntimeCapabilities,
+        supported_backends: frozenset[DeploymentBackend] | None = None,
     ) -> ResolvedModelRuntime:
+        supported = supported_backends or frozenset(
+            {DeploymentBackend.ONNX_CPU, DeploymentBackend.ONNX_CUDA, DeploymentBackend.TENSORRT}
+        )
+        if requested is not DeploymentBackend.AUTO and requested not in supported:
+            raise RuntimeResolutionError("ADAPTER_UNAVAILABLE")
         if requested is DeploymentBackend.ONNX_CPU:
             if not artifacts.onnx:
                 raise RuntimeResolutionError("ARTIFACT_MISSING")
@@ -62,23 +68,39 @@ class InferenceRuntimeResolver:
             return ResolvedModelRuntime(requested, requested, "TensorRT")
 
         fallback_reason: str | None = None
-        if capabilities.tensorrt_available and artifacts.compatible_tensorrt:
+        if (
+            DeploymentBackend.TENSORRT in supported
+            and capabilities.tensorrt_available
+            and artifacts.compatible_tensorrt
+        ):
             return ResolvedModelRuntime(requested, DeploymentBackend.TENSORRT, "TensorRT")
         fallback_reason = (
-            "TENSORRT_ARTIFACT_UNAVAILABLE"
+            "TENSORRT_ADAPTER_UNAVAILABLE"
+            if DeploymentBackend.TENSORRT not in supported
+            else "TENSORRT_ARTIFACT_UNAVAILABLE"
             if capabilities.tensorrt_available
             else "TENSORRT_UNAVAILABLE"
         )
-        if capabilities.onnx_cuda_available and artifacts.onnx:
+        if (
+            DeploymentBackend.ONNX_CUDA in supported
+            and capabilities.onnx_cuda_available
+            and artifacts.onnx
+        ):
             return ResolvedModelRuntime(
                 requested,
                 DeploymentBackend.ONNX_CUDA,
                 "CUDAExecutionProvider",
                 fallback_reason,
             )
-        if not capabilities.onnx_cuda_available:
+        if DeploymentBackend.ONNX_CUDA not in supported:
+            fallback_reason = "CUDA_ADAPTER_UNAVAILABLE"
+        elif not capabilities.onnx_cuda_available:
             fallback_reason = "CUDA_PROVIDER_UNAVAILABLE"
-        if capabilities.onnx_cpu_available and artifacts.onnx:
+        if (
+            DeploymentBackend.ONNX_CPU in supported
+            and capabilities.onnx_cpu_available
+            and artifacts.onnx
+        ):
             return ResolvedModelRuntime(
                 requested,
                 DeploymentBackend.ONNX_CPU,
@@ -98,9 +120,11 @@ class PreparedModelRuntime(Protocol):
 
 
 class AtomicModelSet:
-    def __init__(self) -> None:
+    def __init__(self, *, defer_retirement: bool = False) -> None:
         self._lock = Lock()
         self._active: dict[ModelType, PreparedModelRuntime] = {}
+        self._retired: list[PreparedModelRuntime] = []
+        self._defer_retirement = defer_retirement
 
     def active(self, model_type: ModelType) -> PreparedModelRuntime | None:
         with self._lock:
@@ -117,4 +141,25 @@ class AtomicModelSet:
             previous = self._active.get(candidate.model_type)
             self._active[candidate.model_type] = candidate
         if previous is not None and previous is not candidate:
-            previous.close()
+            if self._defer_retirement:
+                with self._lock:
+                    self._retired.append(previous)
+            else:
+                previous.close()
+
+    def close_retired(self) -> None:
+        """Call only after all readers of replaced runtimes have stopped."""
+        with self._lock:
+            retired = self._retired
+            self._retired = []
+        for runtime in retired:
+            runtime.close()
+
+    def close_all(self) -> None:
+        with self._lock:
+            active = list(self._active.values())
+            self._active.clear()
+            retired = self._retired
+            self._retired = []
+        for runtime in active + retired:
+            runtime.close()

@@ -1,7 +1,11 @@
 from pathlib import Path
 
 import pytest
-from control_api.model_artifacts import LocalModelArtifactStorage, ModelArtifactIngestor
+from control_api.model_artifacts import (
+    LocalModelArtifactStorage,
+    ModelArtifact,
+    ModelArtifactIngestor,
+)
 from control_api.model_registry import InMemoryModelRepository, ModelRegistryService
 from fr_domain.model_management import (
     ArtifactFormat,
@@ -22,6 +26,46 @@ def service(tmp_path: Path) -> ModelRegistryService:
         InMemoryModelRepository(),
         ModelArtifactIngestor(LocalModelArtifactStorage(tmp_path), Inspector(), 1024),
     )
+
+
+def test_model_ingest_deletes_object_when_metadata_commit_fails(tmp_path: Path) -> None:
+    class FailingRepository(InMemoryModelRepository):
+        def put_artifact_and_version(
+            self, _artifact: ModelArtifact, _version: ModelVersion
+        ) -> None:
+            raise RuntimeError("metadata commit failed")
+
+    storage = LocalModelArtifactStorage(tmp_path)
+    registry = ModelRegistryService(
+        FailingRepository(), ModelArtifactIngestor(storage, Inspector(), 1024)
+    )
+    definition = registry.create_definition("YOLO", ModelType.PERSON_DETECTOR, "ONNX")
+
+    with pytest.raises(RuntimeError, match="metadata commit failed"):
+        registry.create_version(
+            definition.id, "v1", "model.onnx", b"controlled-onnx", person_manifest()
+        )
+
+    assert list(tmp_path.rglob("model.onnx")) == []
+
+
+def test_model_ingest_persists_artifact_and_version_atomically(tmp_path: Path) -> None:
+    repository = InMemoryModelRepository()
+    registry = ModelRegistryService(
+        repository,
+        ModelArtifactIngestor(LocalModelArtifactStorage(tmp_path), Inspector(), 1024),
+    )
+    definition = registry.create_definition("YOLO", ModelType.PERSON_DETECTOR, "ONNX")
+
+    version = registry.create_version(
+        definition.id, "v1", "model.onnx", b"controlled-onnx", person_manifest()
+    )
+
+    artifact = repository.get_artifact(version.artifact_id)
+    stored_version = repository.get_version(version.id)
+    assert artifact is not None and stored_version == version
+    assert artifact.id == version.artifact_id
+    assert artifact.checksum == version.checksum
 
 
 def test_definition_crud_and_version_immutability(tmp_path: Path) -> None:
@@ -148,6 +192,7 @@ def test_assignment_requires_healthy_matching_runtime_and_embedder_invalidates_i
     with pytest.raises(ValueError, match="MODEL_TYPE_MISMATCH"):
         registry.assign(ModelType.FACE_DETECTOR, deployment.id)
     assert registry.readiness()["status"] == "NOT_READY"
+    assert "FACE_RECOGNITION_PIPELINE_NOT_IMPLEMENTED" in registry.readiness()["reasons"]
 
 
 def embedder_manifest() -> ModelManifest:

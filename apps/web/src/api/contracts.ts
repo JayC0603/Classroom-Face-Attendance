@@ -23,6 +23,9 @@ export interface RuntimeStatus {
     | "STOPPED";
   input_fps: number;
   processed_fps: number;
+  latest_processing_latency_ms?: number | null;
+  tracker_state?: "ACTIVE" | "UNAVAILABLE" | "ERROR";
+  person_detector_runtime?: {health: "ACTIVE" | "ERROR"; model_version: string; latest_latency_ms: number | null} | null;
   dropped_frames: number;
   active_tracks: number;
   ring_buffer_frames: number;
@@ -37,25 +40,39 @@ export interface RuntimeStatus {
 }
 
 export type CameraCodec = "AUTO" | "H264" | "H265";
+export type CameraSourceType = "rtsp" | "local_webcam" | "webcam";
 
 export interface CameraPublic {
   id: string;
   name: string;
-  source_type: "rtsp";
-  rtsp_url: string;
+  source_type: CameraSourceType;
+  device_index?: number | null;
+  rtsp_url: string | null;
   codec: CameraCodec;
   enabled: boolean;
   sampling_fps: number;
+  display_fps?: number;
+  roi_polygon?: Array<[number, number]>;
+  attendance_enabled?: boolean;
+  evidence_retention_days?: number;
+  unknown_alert_frames?: number;
   lifecycle: "DRAFT" | "ACTIVE";
   revision: string;
 }
 
 export interface CameraInput {
   name: string;
-  rtsp_url: string;
+  source_type?: CameraSourceType;
+  device_index?: number;
+  rtsp_url?: string;
   codec: CameraCodec;
   enabled: boolean;
   sampling_fps: number;
+  display_fps?: number;
+  roi_polygon?: Array<[number, number]>;
+  attendance_enabled?: boolean;
+  evidence_retention_days?: number;
+  unknown_alert_frames?: number;
 }
 
 export interface CameraConnectionResult {

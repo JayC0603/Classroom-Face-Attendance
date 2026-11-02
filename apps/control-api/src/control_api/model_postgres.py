@@ -116,13 +116,47 @@ class PostgresModelRepository:
         value = self._one("model_artifacts", item_id)
         return ModelArtifact(**value) if value else None
 
+    def list_artifacts(self) -> list[ModelArtifact]:
+        return [ModelArtifact(**value) for value in self._all("model_artifacts")]
+
     def put_version(self, value: ModelVersion) -> None:
-        self._put(
-            "model_versions",
-            value.id,
-            _json(value),
-            (value.model_definition_id, value.version),
-        )
+        try:
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO model_versions (id,model_definition_id,version_label,data) "
+                    "VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO UPDATE SET "
+                    "version_label=EXCLUDED.version_label,data=EXCLUDED.data",
+                    (value.id, value.model_definition_id, value.version, _json(value)),
+                )
+            self._connection.commit()
+        except Exception as error:
+            rollback = getattr(self._connection, "rollback", None)
+            if callable(rollback):
+                rollback()
+            if getattr(error, "sqlstate", None) == "23505":
+                raise ValueError("MODEL_VERSION_EXISTS") from error
+            raise
+
+    def put_artifact_and_version(self, artifact: ModelArtifact, version: ModelVersion) -> None:
+        if version.artifact_id != artifact.id:
+            raise ValueError("ARTIFACT_VERSION_MISMATCH")
+        try:
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO model_artifacts (id,data) VALUES (%s,%s)",
+                    (artifact.id, _json(artifact)),
+                )
+                cursor.execute(
+                    "INSERT INTO model_versions "
+                    "(id,model_definition_id,version_label,data) VALUES (%s,%s,%s,%s)",
+                    (version.id, version.model_definition_id, version.version, _json(version)),
+                )
+            self._connection.commit()
+        except Exception:
+            rollback = getattr(self._connection, "rollback", None)
+            if rollback is not None:
+                rollback()
+            raise
 
     def get_version(self, item_id: str) -> ModelVersion | None:
         value = self._one("model_versions", item_id)
@@ -135,9 +169,30 @@ class PostgresModelRepository:
         ]
 
     def delete_version(self, version_id: str) -> None:
-        with self._connection.cursor() as cursor:
-            cursor.execute("DELETE FROM model_versions WHERE id=%s", (version_id,))
-        self._connection.commit()
+        try:
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM model_versions WHERE id=%s FOR UPDATE", (version_id,)
+                )
+                cursor.execute(
+                    "SELECT d.id FROM model_deployments d "
+                    "WHERE d.model_version_id=%s AND (d.data->>'status' IN "
+                    "('ACTIVE','ACTIVATION_PENDING') OR EXISTS "
+                    "(SELECT 1 FROM model_assignments a WHERE a.deployment_id=d.id))",
+                    (version_id,),
+                )
+                if cursor.fetchone() is not None:
+                    raise ValueError("ARTIFACT_IN_USE")
+                cursor.execute(
+                    "DELETE FROM model_deployments WHERE model_version_id=%s", (version_id,)
+                )
+                cursor.execute("DELETE FROM model_versions WHERE id=%s", (version_id,))
+            self._connection.commit()
+        except Exception:
+            rollback = getattr(self._connection, "rollback", None)
+            if callable(rollback):
+                rollback()
+            raise
 
     def put_deployment(self, value: ModelDeployment) -> None:
         payload = _json(value)

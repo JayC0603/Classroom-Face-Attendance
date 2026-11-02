@@ -5,6 +5,7 @@ from typing import Annotated, Any, cast
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi import status as http_status
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from fr_domain.model_management import (
     DeploymentBackend,
     ModelDefinition,
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from control_api.model_artifacts import ArtifactValidationError
 from control_api.model_registry import ModelRegistryService
+from control_api.object_storage import ObjectStorageError
 
 
 class DefinitionCreate(BaseModel):
@@ -221,6 +223,40 @@ def create_model_router(
                 for item in registry.pending_deployments()
             ]
         }
+
+    @router.get("/internal/model-deployments/assigned")
+    def assigned_deployments(
+        x_worker_token: str | None = Header(default=None),
+    ) -> dict[str, list[object]]:
+        authorize(x_worker_token)
+        return {
+            "items": [
+                jsonable_encoder(registry.internal_deployment(deployment_id))
+                for deployment_id in registry.assignments().values()
+                if registry.get_deployment(deployment_id).status.value == "ACTIVE"
+            ]
+        }
+
+    @router.get("/internal/model-artifacts/{artifact_id}/content")
+    def artifact_content(
+        artifact_id: str,
+        x_worker_token: str | None = Header(default=None),
+    ) -> StreamingResponse:
+        authorize(x_worker_token)
+        try:
+            chunks = registry.artifact_content(artifact_id)
+        except KeyError as error:
+            raise HTTPException(404, "model artifact not found") from error
+        except ObjectStorageError as error:
+            raise HTTPException(503, "model artifact storage unavailable") from error
+        return StreamingResponse(
+            chunks,
+            media_type="application/octet-stream",
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.post("/internal/model-deployments/{deployment_id}/activation-result")
     def activation_result(

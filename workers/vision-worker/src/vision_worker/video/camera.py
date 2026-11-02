@@ -76,8 +76,12 @@ class GStreamerBackend(Protocol):
     def close(self) -> None: ...
 
 
+class FramePending(Exception):
+    """A live bounded source currently has no newer frame."""
+
+
 class GStreamerCameraSource:
-    """Owns RTSP connection/reconnect behavior around a GStreamer backend."""
+    """Owns camera connection/reconnect behavior around interchangeable backends."""
 
     def __init__(
         self,
@@ -126,25 +130,43 @@ class GStreamerCameraSource:
                     self.state.connected()
                     while (limit is None or yielded < limit) and not self._stop_requested.is_set():
                         sequence = yielded + 1
-                        frame = self._backend.read(self._camera_id, self._session_id, sequence)
+                        try:
+                            frame = self._backend.read(self._camera_id, self._session_id, sequence)
+                        except FramePending:
+                            continue
                         if frame is None:
                             raise ConnectionError("GStreamer stream ended")
                         yielded += 1
+                        self._session_id = frame.stream_session_id
                         yield frame
-                except (ConnectionError, OSError, RuntimeError):
+                except (ConnectionError, OSError, RuntimeError) as error:
+                    category = (
+                        str(error)
+                        if str(error)
+                        in {
+                            "LOCAL_WEBCAM_UNAVAILABLE",
+                            "LOCAL_WEBCAM_READ_FAILED",
+                            "LOCAL_WEBCAM_OPEN_TIMEOUT",
+                            "OPENCV_UNAVAILABLE",
+                        }
+                        else "CAMERA_STREAM_ERROR"
+                    )
                     self._backend.close()
                     if self._stop_requested.is_set():
                         return
                     reconnects += 1
-                    self.state.disconnected("CAMERA_STREAM_ERROR")
+                    self.state.disconnected(category)
                     if reconnects > self._max_reconnect_attempts:
-                        self.state.failed("CAMERA_STREAM_ERROR")
+                        self.state.failed(category)
                         return
                     delay = min(
                         self._reconnect_delay_seconds * (2 ** (reconnects - 1)),
                         self._max_reconnect_delay_seconds,
                     )
-                    self._sleeper(delay)
+                    if self._sleeper is sleep:
+                        self._stop_requested.wait(delay)
+                    else:
+                        self._sleeper(delay)
         finally:
             self._backend.close()
             if self.state.snapshot.state not in {

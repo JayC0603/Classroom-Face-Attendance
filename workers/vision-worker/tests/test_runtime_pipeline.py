@@ -38,7 +38,8 @@ def test_mock_detection_flows_through_tracking_and_track_state() -> None:
     assert status.active_tracks == 1
     assert status.ring_buffer_frames == 2
     assert status.ring_buffer_capacity == 4
-    assert status.worker_health == "healthy"
+    assert status.worker_health == "degraded"  # mock adapters are not production health
+    assert status.tracker_state == "UNAVAILABLE"
     assert status.active_config_revision == "revision-7"
 
 

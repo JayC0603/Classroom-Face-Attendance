@@ -1,11 +1,16 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fr_contracts.runtime_status import CameraConnectionState
 
 from vision_worker.runtime.pipeline import FrameProcessingResult, RuntimePipeline
-from vision_worker.runtime.status_publisher import RuntimeStatusPublisher
+from vision_worker.runtime.status_publisher import (
+    BestEffortRuntimeStatusPublisher,
+    RuntimeStatusPublisher,
+)
 from vision_worker.video.camera import GStreamerCameraSource
+from vision_worker.video.frame import VideoFrame
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,10 +29,14 @@ class RuntimeRunner:
         source: GStreamerCameraSource,
         pipeline: RuntimePipeline,
         status_publisher: RuntimeStatusPublisher | None = None,
+        processed_frame_callback: Callable[[VideoFrame, FrameProcessingResult], None] | None = None,
     ) -> None:
         self._source = source
         self._pipeline = pipeline
-        self._status_publisher = status_publisher
+        self._processed_frame_callback = processed_frame_callback
+        self._status_publisher = (
+            BestEffortRuntimeStatusPublisher(status_publisher) if status_publisher else None
+        )
         self._last_frame_at: str | None = None
 
     def run(self, limit: int | None = None) -> RuntimeRunSummary:
@@ -41,6 +50,8 @@ class RuntimeRunner:
             if result is not None:
                 processed += 1
                 last_result = result
+                if self._processed_frame_callback is not None:
+                    self._processed_frame_callback(frame, result)
             self._publish_status()
         self._publish_status()
         return RuntimeRunSummary(
@@ -54,13 +65,20 @@ class RuntimeRunner:
         if self._status_publisher is None:
             return
         snapshot = self._source.state.snapshot
-        status = self._pipeline.status(camera_state=snapshot.state).model_copy(
+        pipeline_status = self._pipeline.status(camera_state=snapshot.state)
+        status = pipeline_status.model_copy(
             update={
                 "stream_session_id": self._source.stream_session_id,
                 "reconnect_count": snapshot.total_reconnects,
                 "last_connected_at": snapshot.last_connected_at,
                 "last_frame_at": self._last_frame_at,
-                "error_category": ("CAMERA_CONNECTION_FAILED" if snapshot.last_error else None),
+                "error_category": (
+                    "CAMERA_CONNECTION_FAILED"
+                    if snapshot.last_error
+                    else "MODEL_INFERENCE_ERROR"
+                    if pipeline_status.face_pipeline_runtime.state == "ERROR"
+                    else None
+                ),
             }
         )
         self._status_publisher.publish(status)

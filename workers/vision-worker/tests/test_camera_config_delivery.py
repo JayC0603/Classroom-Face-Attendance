@@ -95,3 +95,22 @@ def test_synchronizer_does_not_restart_unchanged_revision() -> None:
     manager.close_all()
     assert made[0][1].closed is True
     assert store.cleared == ["cam-1"]
+
+
+def test_model_runtime_revision_restarts_camera_reader_before_retirement() -> None:
+    made: list[Source] = []
+    store = Store()
+    config = ActiveCamera("cam-1", "Entrance", "rtsp://camera/live", "AUTO", True, 5.0, "r1")
+
+    def factory(_config: ActiveCamera) -> Source:
+        source = Source()
+        made.append(source)
+        return source
+
+    manager = CameraRuntimeManager(factory, store)
+    assert manager.apply([config], runtime_revision="model-1") == ["cam-1"]
+    assert manager.apply([config], runtime_revision="model-1") == []
+    assert manager.apply([config], runtime_revision="model-2") == ["cam-1"]
+    assert made[0].closed is True
+    assert made[1].closed is False
+    manager.close_all()

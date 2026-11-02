@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib import import_module
@@ -8,6 +9,8 @@ from uuid import uuid4
 
 from fr_domain.model_management import ModelManifest, ModelType
 
+from control_api.object_storage import ObjectStorage
+
 
 class ArtifactValidationError(ValueError):
     pass
@@ -15,6 +18,13 @@ class ArtifactValidationError(ValueError):
 
 class ArtifactInspector(Protocol):
     def validate(self, payload: bytes, manifest: ModelManifest) -> None: ...
+
+
+class ModelArtifactStorage(Protocol):
+    def store(self, definition_id: str, version_id: str, payload: bytes) -> str: ...
+    def read(self, storage_key: str) -> bytes: ...
+    def delete(self, storage_key: str) -> None: ...
+    def iter_bytes(self, storage_key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]: ...
 
 
 class OnnxArtifactInspector:
@@ -102,11 +112,42 @@ class LocalModelArtifactStorage:
             raise ArtifactValidationError("INVALID_STORAGE_PATH")
         candidate.unlink(missing_ok=True)
 
+    def iter_bytes(self, storage_key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        candidate = (self._root / storage_key).resolve()
+        if not candidate.is_relative_to(self._root):
+            raise ArtifactValidationError("INVALID_STORAGE_PATH")
+        with candidate.open("rb") as source:
+            while chunk := source.read(chunk_size):
+                yield chunk
+
+
+class ObjectStoreModelArtifactStorage:
+    def __init__(self, storage: ObjectStorage) -> None:
+        self._storage = storage
+
+    def store(self, definition_id: str, version_id: str, payload: bytes) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", definition_id) or not re.fullmatch(
+            r"[A-Za-z0-9-]{1,80}", version_id
+        ):
+            raise ArtifactValidationError("INVALID_ARTIFACT_IDENTITY")
+        key = f"{uuid4().hex}.onnx"
+        self._storage.put(key, payload, "application/onnx")
+        return key
+
+    def read(self, storage_key: str) -> bytes:
+        return self._storage.get(storage_key)
+
+    def delete(self, storage_key: str) -> None:
+        self._storage.delete(storage_key)
+
+    def iter_bytes(self, storage_key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        yield from self._storage.iter_bytes(storage_key, chunk_size)
+
 
 class ModelArtifactIngestor:
     def __init__(
         self,
-        storage: LocalModelArtifactStorage,
+        storage: ModelArtifactStorage,
         inspector: ArtifactInspector,
         max_size_bytes: int,
     ) -> None:
@@ -141,3 +182,9 @@ class ModelArtifactIngestor:
         checksum = sha256(payload).hexdigest()
         storage_key = self._storage.store(definition_id, version_id, payload)
         return ModelArtifact(str(uuid4()), checksum, len(payload), "ONNX", storage_key)
+
+    def delete(self, storage_key: str) -> None:
+        self._storage.delete(storage_key)
+
+    def iter_bytes(self, storage_key: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        yield from self._storage.iter_bytes(storage_key, chunk_size)

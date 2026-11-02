@@ -101,3 +101,27 @@ def test_successful_atomic_swap_closes_previous_after_new_runtime_is_healthy() -
     model_set.activate(replacement)
     assert model_set.active(ModelType.PERSON_DETECTOR) is replacement
     assert old.closed is True
+
+
+def test_deferred_retirement_keeps_old_runtime_until_reader_replaced() -> None:
+    model_set = AtomicModelSet(defer_retirement=True)
+    old = Runtime("old")
+    replacement = Runtime("replacement")
+    model_set.activate(old)
+    model_set.activate(replacement)
+    assert model_set.active(ModelType.PERSON_DETECTOR) is replacement
+    assert old.closed is False
+    model_set.close_retired()
+    assert old.closed is True
+    assert replacement.closed is False
+    model_set.close_all()
+    assert replacement.closed is True
+
+
+def test_close_all_releases_active_runtime() -> None:
+    model_set = AtomicModelSet()
+    runtime = Runtime("current")
+    model_set.activate(runtime)
+    model_set.close_all()
+    assert runtime.closed is True
+    assert model_set.active(ModelType.PERSON_DETECTOR) is None

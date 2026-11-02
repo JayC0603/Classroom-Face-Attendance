@@ -1,151 +1,61 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-
-import {
-  activateModelDeployment,
-  assignModel,
-  createModel,
-  createModelDeployment,
-  getRecognitionReadiness,
-  listModels,
-  uploadModelVersion
-} from "../../api/client";
-import type {
-  DeploymentBackend,
-  ModelDefinitionPublic,
-  ModelType,
-  RecognitionReadiness
-} from "../../api/contracts";
-
-const roles: Array<{ type: ModelType; label: string; preset: string }> = [
-  { type: "PERSON_DETECTOR", label: "Person Detection", preset: "YOLO" },
-  { type: "FACE_DETECTOR", label: "Face Detection", preset: "SCRFD" },
-  { type: "FACE_EMBEDDER", label: "Face Embedding", preset: "AdaFace" }
-];
-
-function manifestPreset(type: ModelType) {
-  const faceEmbedder = type === "FACE_EMBEDDER";
-  return {
-    schema_version: 1,
-    model_type: type,
-    inputs: [{ name: "input", shape: [1, 3, faceEmbedder ? 112 : 640, faceEmbedder ? 112 : 640], dtype: "float32" }],
-    outputs: [{ name: "output", shape: faceEmbedder ? [1, 512] : [1, "detections"], dtype: "float32" }],
-    preprocessing: {
-      layout: "NCHW",
-      color_order: "RGB",
-      normalization: faceEmbedder ? "adaface_default" : "zero_to_one",
-      resize_mode: faceEmbedder ? "aligned" : "letterbox"
-    },
-    metadata: type === "PERSON_DETECTOR"
-      ? { architecture: "YOLO", output_semantics: "detections", person_class_id: 0 }
-      : type === "FACE_DETECTOR"
-        ? { architecture: "SCRFD", output_semantics: "boxes_scores_landmarks", landmark_points: 5 }
-        : {
-            architecture: "AdaFace",
-            embedding_dimension: 512,
-            l2_normalized: true,
-            distance_metric: "cosine",
-            alignment_profile: "arcface_112x112"
-          },
-    runtime_compatibility: ["ONNX_CPU", "ONNX_CUDA"]
-  };
-}
+import {useEffect, useState} from 'react';
+import {getSimpleRecognitionStatus, type SimpleRecognitionStatus} from '../../api/simpleRecognition';
+import {AdvancedModelsPanel} from './AdvancedModelsPanel';
+import {PersonModelsPanel} from './PersonModelsPanel';
 
 export function ModelsPanel() {
-  const [models, setModels] = useState<ModelDefinitionPublic[]>([]);
-  const [readiness, setReadiness] = useState<RecognitionReadiness | null>(null);
+  const [status, setStatus] = useState<SimpleRecognitionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
 
-  const refresh = useCallback(async () => {
-    const [nextModels, nextReadiness] = await Promise.all([
-      listModels(),
-      getRecognitionReadiness()
-    ]);
-    setModels(nextModels);
-    setReadiness(nextReadiness);
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    async function poll() {
+      try {
+        const next = await getSimpleRecognitionStatus(controller.signal);
+        if (!disposed) {setStatus(next); setError(null);}
+      } catch {
+        if (!disposed) setError('Không kết nối được dịch vụ so sánh khuôn mặt.');
+      } finally {
+        if (!disposed) timer = setTimeout(() => void poll(), 5000);
+      }
+    }
+    void poll();
+    return () => {disposed = true; controller.abort(); clearTimeout(timer);};
   }, []);
 
-  useEffect(() => { refresh().catch(() => setError("Unable to load model configuration")); }, [refresh]);
-
-  async function addModel(role: (typeof roles)[number]) {
+  async function refresh() {
     setBusy(true); setError(null);
-    try {
-      await createModel({ name: `${role.preset} Model`, model_type: role.type, framework: "ONNX" });
-      await refresh();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Model creation failed"); }
-    finally { setBusy(false); }
+    try {setStatus(await getSimpleRecognitionStatus(undefined, true));}
+    catch {setError('Không nạp lại được ảnh đăng ký.');}
+    finally {setBusy(false);}
   }
 
-  async function upload(event: FormEvent<HTMLFormElement>, model: ModelDefinitionPublic) {
-    event.preventDefault(); setBusy(true); setError(null);
-    const data = new FormData(event.currentTarget);
-    const file = data.get("file");
-    try {
-      if (!(file instanceof File) || file.size === 0) throw new Error("Select an ONNX file");
-      await uploadModelVersion(model.id, String(data.get("version")), manifestPreset(model.model_type), file);
-      await refresh();
-      event.currentTarget.reset();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Upload failed"); }
-    finally { setBusy(false); }
-  }
-
-  async function deploy(versionId: string, backend: DeploymentBackend) {
-    setBusy(true); setError(null);
-    try {
-      const deployment = await createModelDeployment(versionId, backend);
-      await activateModelDeployment(deployment.id);
-      await refresh();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Deployment failed"); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <section aria-labelledby="models-heading">
-      <div className="section-heading">
-        <div><p className="eyebrow">MODEL CONTROL PLANE</p><h2 id="models-heading">Models</h2></div>
-        <span className={`readiness ${readiness?.status === "READY" ? "ready" : "not-ready"}`}>
-          Pipeline {readiness?.status ?? "CHECKING"}
-        </span>
-      </div>
-      {error && <p role="alert" className="error">{error}</p>}
-      <div className="grid">
-        {roles.map((role) => {
-          const items = models.filter((item) => item.model_type === role.type);
-          return (
-            <article key={role.type}>
-              <h3>{role.label}</h3>
-              {items.length === 0 ? (
-                <><p className="not-configured">NOT CONFIGURED</p><button disabled={busy} onClick={() => addModel(role)}>Configure {role.preset}</button></>
-              ) : items.map((model) => (
-                <div key={model.id} className="model-card">
-                  <strong>{model.name}</strong><span>{model.framework}</span>
-                  {model.versions.map((version) => (
-                    <div key={version.id} className="model-version">
-                      <span>{version.version} · {version.format} · {version.checksum.slice(0, 12)}</span>
-                      <span>{version.validation_status}</span>
-                      <button disabled={busy} onClick={() => deploy(version.id, "AUTO")}>Deploy AUTO</button>
-                    </div>
-                  ))}
-                  <form onSubmit={(event) => upload(event, model)}>
-                    <label>Version<input name="version" required placeholder="v1" /></label>
-                    <label>ONNX artifact<input name="file" type="file" accept=".onnx,application/octet-stream" required /></label>
-                    <button disabled={busy} type="submit">Validate & upload</button>
-                  </form>
-                  {model.deployments.map((deployment) => (
-                    <p key={deployment.id}>{deployment.backend} · {deployment.status}{deployment.error_category ? ` · ${deployment.error_category}` : ""}
-                      {deployment.status === "ACTIVE" && (
-                        <button disabled={busy} onClick={async () => {
-                          await assignModel(model.model_type, deployment.id); await refresh();
-                        }}>Use for recognition</button>
-                      )}</p>
-                  ))}
-                </div>
-              ))}
-            </article>
-          );
-        })}
-      </div>
-      {readiness?.reasons.length ? <p>Not ready: {readiness.reasons.join(", ")}</p> : null}
-    </section>
-  );
+  const rejected = status?.images?.filter(image => image.state !== 'READY') ?? [];
+  return <section className="recognition-models" aria-labelledby="simple-models-heading">
+    <p className="eyebrow">SO SÁNH KHUÔN MẶT</p>
+    <h2 id="simple-models-heading">Mô hình nhận diện</h2>
+    {error && <p role="alert">{error}</p>}
+    <article>
+      <h3>YuNet + SFace</h3>
+      <p>YuNet tìm khuôn mặt; SFace so sánh với ảnh đã đăng ký. Model và ảnh mẫu được xử lý tự động.</p>
+      <a className="button-link" href="#people">{'M\u1edf h\u1ed3 s\u01a1 khu\u00f4n m\u1eb7t \u0111\u1ec3 t\u1ea3i \u1ea3nh'}</a>
+      <strong>{status?.state === 'READY' ? 'Sẵn sàng so sánh' :
+        status?.state === 'NO_REFERENCE_IMAGES' ? 'Cần ảnh đăng ký có một khuôn mặt rõ' :
+        status?.state === 'PROCESSING' || !status ? 'Đang chuẩn bị model và ảnh mẫu…' : `Lỗi: ${status.state}`}</strong>
+      {status?.reference_people !== undefined && status.reference_images !== undefined && <p>{status.reference_people} hồ sơ · {status.reference_images} ảnh mẫu dùng được</p>}
+      {rejected.length > 0 && <p role="status">{rejected.length} ảnh chưa dùng được: cần một khuôn mặt rõ, không bị cắt hoặc ảnh nhóm.</p>}
+      <p>Bật camera để so sánh. Cần ít nhất 3 frame khớp liên tiếp để xác minh; độ tương đồng không phải phần trăm xác suất.</p>
+      <button type="button" disabled={busy} onClick={() => void refresh()}>{busy ? 'Đang nạp ảnh…' : 'Nạp lại ảnh đăng ký'}</button>
+    </article>
+    <PersonModelsPanel />
+    <details onToggle={event => setAdvanced(event.currentTarget.open)}>
+      <summary>Cấu hình pipeline nâng cao</summary>
+      <p>YOLO/SCRFD/AdaFace là pipeline tùy chỉnh riêng. Luồng so sánh YuNet + SFace phía trên không yêu cầu cấu hình này.</p>
+      {advanced && <AdvancedModelsPanel />}
+    </details>
+  </section>;
 }

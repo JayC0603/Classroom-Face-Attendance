@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ModelsPanel } from "./ModelsPanel";
+import { AdvancedModelsPanel as ModelsPanel } from "./AdvancedModelsPanel";
 import type { ModelDefinitionPublic } from "../../api/contracts";
 
 const yolo: ModelDefinitionPublic = {
@@ -48,14 +48,14 @@ describe("ModelsPanel", () => {
     const user = userEvent.setup();
     render(<ModelsPanel />);
     expect(await screen.findByText("Pipeline NOT_READY")).toBeTruthy();
-    expect(screen.getAllByText("NOT CONFIGURED")).toHaveLength(3);
-    await user.click(screen.getByRole("button", { name: "Configure YOLO" }));
+    expect(screen.getAllByText("Chưa cấu hình")).toHaveLength(3);
+    await user.click(screen.getByRole("button", { name: "Thêm model YOLO" }));
     expect(await screen.findByText("YOLO Model")).toBeTruthy();
     const create = requests.find((request) => request.init?.method === "POST");
     expect(JSON.parse(String(create?.init?.body))).toMatchObject({
       model_type: "PERSON_DETECTOR",
       framework: "ONNX"
     });
-    await waitFor(() => expect(screen.getAllByText("NOT CONFIGURED")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Chưa cấu hình")).toHaveLength(2));
   });
 });

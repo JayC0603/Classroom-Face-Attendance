@@ -57,3 +57,17 @@ def test_partial_postgres_configuration_fails_closed(environment: dict[str, str]
 
 def test_unconfigured_local_mode_is_explicitly_volatile() -> None:
     assert build_camera_persistence({}).mode == "in_memory"
+
+
+def test_explicit_postgres_connection_failure_does_not_fallback_to_memory() -> None:
+    def unavailable(_dsn: str) -> Connection:
+        raise OSError("database unavailable")
+
+    with pytest.raises(OSError, match="database unavailable"):
+        build_camera_persistence(
+            {
+                "FR_POSTGRES_DSN": "postgresql://db.invalid/face",
+                "FR_CAMERA_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            },
+            connector=unavailable,
+        )

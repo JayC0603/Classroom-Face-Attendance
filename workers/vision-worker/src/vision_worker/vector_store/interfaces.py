@@ -1,36 +1,33 @@
-from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Protocol
 
-
-@dataclass(frozen=True, slots=True)
-class VectorCandidate:
-    person_id: str
-    score: float
+from fr_domain.vector_index import EmbeddingCompatibility, EnrollmentVector, IndexRevision
+from fr_domain.vector_index import VectorCandidate as VectorCandidate
 
 
 class VectorStore(Protocol):
     adapter_kind: str
 
+    def build(self, revision: IndexRevision, vectors: list[EnrollmentVector]) -> IndexRevision: ...
+    def activate(self, revision: IndexRevision) -> None: ...
+    def load(self, revision: IndexRevision) -> None: ...
     def search(
-        self, collection_id: str, embedding: Sequence[float], top_k: int
+        self, embedding: tuple[float, ...], compatibility: EmbeddingCompatibility, top_k: int
     ) -> list[VectorCandidate]: ...
-
-    def add(self, collection_id: str, person_id: str, embedding: Sequence[float]) -> None: ...
-
-    def remove(self, collection_id: str, person_id: str) -> None: ...
 
 
 class StubVectorStore:
     adapter_kind = "stub"
 
     def search(
-        self, collection_id: str, embedding: Sequence[float], top_k: int
+        self, embedding: tuple[float, ...], compatibility: EmbeddingCompatibility, top_k: int
     ) -> list[VectorCandidate]:
-        return []
+        raise RuntimeError("VECTOR_INDEX_UNAVAILABLE")
 
-    def add(self, collection_id: str, person_id: str, embedding: Sequence[float]) -> None:
-        return None
+    def build(self, revision: IndexRevision, vectors: list[EnrollmentVector]) -> IndexRevision:
+        raise RuntimeError("VECTOR_INDEX_UNAVAILABLE")
 
-    def remove(self, collection_id: str, person_id: str) -> None:
-        return None
+    def activate(self, revision: IndexRevision) -> None:
+        raise RuntimeError("VECTOR_INDEX_UNAVAILABLE")
+
+    def load(self, revision: IndexRevision) -> None:
+        raise RuntimeError("VECTOR_INDEX_UNAVAILABLE")

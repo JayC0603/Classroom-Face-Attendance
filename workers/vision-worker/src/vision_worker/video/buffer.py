@@ -26,6 +26,9 @@ class BoundedFrameBuffer:
     def snapshot(self) -> tuple[VideoFrame, ...]:
         return tuple(self._frames)
 
+    def clear(self) -> None:
+        self._frames.clear()
+
     @property
     def usage(self) -> BufferUsage:
         return BufferUsage(frames=len(self._frames), capacity=self._capacity)

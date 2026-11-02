@@ -1,12 +1,11 @@
+from auth_test_support import TestClient, create_app
 from control_api.cameras import (
     CameraConnectionResult,
     CameraService,
     FernetCameraSecretProtector,
     InMemoryCameraRepository,
 )
-from control_api.main import create_app
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 from fr_contracts.runtime_status import CameraConnectionState, RuntimeStatus
 
 
@@ -23,6 +22,42 @@ def client() -> TestClient:
         connection_tester=ConnectedTester(),
     )
     return TestClient(create_app(camera_service=service, internal_camera_token="worker-test-token"))
+
+
+def test_stale_camera_edit_returns_conflict_without_overwriting_newer_configuration():
+    api = client()
+    camera = api.post("/api/v1/cameras", json={"name": "Door", "source_type": "webcam"}).json()
+    path = f"/api/v1/cameras/{camera['id']}"
+    assert (
+        api.patch(
+            path, json={"name": "New name", "expected_revision": camera["revision"]}
+        ).status_code
+        == 200
+    )
+    stale = api.patch(path, json={"name": "Stale name", "expected_revision": camera["revision"]})
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == "CAMERA_REVISION_CONFLICT"
+    assert api.get(path).json()["name"] == "New name"
+
+
+def test_delete_camera_checks_revision_and_removes_active_worker_configuration():
+    api = client()
+    camera = api.post(
+        "/api/v1/cameras", json={"name": "Door", "source_type": "local_webcam"}
+    ).json()
+    path = f"/api/v1/cameras/{camera['id']}"
+    active = api.post(f"{path}/activate").json()
+    assert api.delete(path, params={"expected_revision": camera["revision"]}).status_code == 409
+    assert api.get(path).status_code == 200
+    assert api.delete(path, params={"expected_revision": active["revision"]}).status_code == 204
+    assert api.get(path).status_code == 404
+    assert api.get("/api/v1/cameras").json()["items"] == []
+    assert (
+        api.get(
+            "/api/v1/internal/cameras/active", headers={"X-Worker-Token": "worker-test-token"}
+        ).json()["items"]
+        == []
+    )
 
 
 def test_camera_create_redacts_secret_and_activation_delivers_internal_config() -> None:
@@ -110,7 +145,14 @@ def test_camera_detail_and_runtime_are_scoped_and_secret_safe() -> None:
         reconnect_count=2,
         error_category="UNREACHABLE",
     )
-    assert api.put("/api/v1/runtime/status", json=status.model_dump(mode="json")).status_code == 200
+    assert (
+        api.put(
+            "/api/v1/runtime/status",
+            json=status.model_dump(mode="json"),
+            headers={"X-Worker-Token": "worker-test-token"},
+        ).status_code
+        == 200
+    )
     runtime = api.get(f"/api/v1/cameras/{created['id']}/runtime")
     assert runtime.status_code == 200
     assert runtime.json()["items"][0]["error_category"] == "UNREACHABLE"

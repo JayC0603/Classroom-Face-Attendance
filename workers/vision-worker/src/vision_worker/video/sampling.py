@@ -17,3 +17,6 @@ class FrameSampler:
             return False
         self._last_processed_ms[frame.camera_id] = frame.timestamp_ms
         return True
+
+    def clear(self) -> None:
+        self._last_processed_ms.clear()
