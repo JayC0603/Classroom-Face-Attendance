@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+<title id="title">Face Recognition Platform</title><desc id="desc">Camera management, face enrollment and classroom attendance.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0f172a"/><stop offset="1" stop-color="#312e81"/></linearGradient><linearGradient id="accent"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs>
+<rect width="1200" height="320" rx="24" fill="url(#bg)"/>
+<circle cx="1100" cy="40" r="200" fill="#818cf8" opacity=".08"/><circle cx="950" cy="280" r="180" fill="#22d3ee" opacity=".06"/>
+<rect x="48" y="45" width="230" height="30" rx="15" fill="#22d3ee" opacity=".13"/><text x="66" y="65" font-family="Segoe UI,Arial,sans-serif" font-size="12" font-weight="700" letter-spacing="2" fill="#67e8f9">VISION / IDENTITY / ATTENDANCE</text>
+<text x="48" y="137" font-family="Segoe UI,Arial,sans-serif" font-size="49" font-weight="750" fill="#f8fafc">Face Recognition</text>
+<text x="48" y="193" font-family="Segoe UI,Arial,sans-serif" font-size="49" font-weight="750" fill="url(#accent)">Platform</text>
+<text x="50" y="240" font-family="Segoe UI,Arial,sans-serif" font-size="18" fill="#cbd5e1">Camera management / Face enrollment / Classroom attendance</text>
+<rect x="50" y="269" width="430" height="3" rx="1.5" fill="url(#accent)"/>
+<g transform="translate(940 76)" fill="none" stroke="#67e8f9" stroke-width="4" stroke-linecap="round"><path d="M35 0H0v35M125 0h35v35M0 125v35h35M125 160h35v-35"/><ellipse cx="80" cy="68" rx="37" ry="47" stroke="#c4b5fd"/><path d="M37 144q43-49 86 0" stroke="#c4b5fd"/><path d="M-15 78h190" opacity=".6"/><circle cx="66" cy="62" r="3" fill="#67e8f9"/><circle cx="94" cy="62" r="3" fill="#67e8f9"/></g>
+</svg>

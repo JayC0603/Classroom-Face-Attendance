@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connectRuntimeStatus, getHealth, type HealthStatus } from "../api/client";
 import type { RuntimeStatus } from "../api/contracts";
 import { AdminManagement } from "../features/admin/AdminManagement";
@@ -30,9 +30,36 @@ function Workspace({user,onSignOut}:{user:NonNullable<ReturnType<typeof useSessi
  const initial=()=>{const hash=window.location.hash.slice(1);return hash&&Object.hasOwn(workspacePages,hash)?hash as WorkspacePage:defaultPage(user.role);};
  const [page,setPage]=useState<WorkspacePage>(initial);
  const [health,setHealth]=useState<HealthStatus|null>(null);const [error,setError]=useState<string|null>(null);const [runtimeStatuses,setRuntimeStatuses]=useState<RuntimeStatus[]>([]);const [menuOpen,setMenuOpen]=useState(false);const [signingOut,setSigningOut]=useState(false);
+ const [compactNav, setCompactNav] = useState(false);
+ const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 900);
+ const menuButton = useRef<HTMLButtonElement>(null);
+ useEffect(() => {
+  const resize = () => { setIsMobile(window.innerWidth <= 900); setMenuOpen(false); };
+  window.addEventListener("resize", resize);
+  return () => window.removeEventListener("resize", resize);
+ }, []);
  const allowed=rolePages.includes(page);const info=workspacePages[page];
  useEffect(()=>{const navigate=()=>{const hash=window.location.hash.slice(1);if(Object.hasOwn(workspacePages,hash))setPage(hash as WorkspacePage);setMenuOpen(false);};window.addEventListener("hashchange",navigate);return()=>window.removeEventListener("hashchange",navigate);},[]);
- useEffect(()=>{if(!menuOpen)return;const previous=document.activeElement as HTMLElement|null;const elements=Array.from(document.querySelectorAll<HTMLElement>("#workspace-sidebar a, #workspace-sidebar button"));elements[0]?.focus();const keydown=(event:KeyboardEvent)=>{if(event.key==="Escape"){setMenuOpen(false);return;}if(event.key!=="Tab")return;const first=elements[0],last=elements[elements.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}};const resize=()=>{if(window.innerWidth>900)setMenuOpen(false);};window.addEventListener("keydown",keydown);window.addEventListener("resize",resize);return()=>{window.removeEventListener("keydown",keydown);window.removeEventListener("resize",resize);previous?.focus();};},[menuOpen]);
+ useEffect(() => {
+  if (!menuOpen || !isMobile) return;
+  const previousOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+  const elements = Array.from(document.querySelectorAll<HTMLElement>("#workspace-sidebar a, #workspace-sidebar button"));
+  elements[0]?.focus();
+  const keydown = (event: KeyboardEvent) => {
+   if (event.key === "Escape") { setMenuOpen(false); return; }
+   if (event.key !== "Tab") return;
+   const first = elements[0], last = elements[elements.length - 1];
+   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  };
+  window.addEventListener("keydown", keydown);
+  return () => {
+   document.body.style.overflow = previousOverflow;
+   window.removeEventListener("keydown", keydown);
+   menuButton.current?.focus();
+  };
+ }, [menuOpen, isMobile]);
  useEffect(()=>{
   if(user.role!=="ADMIN")return;
   let disposed=false; let timer: ReturnType<typeof setTimeout>;
@@ -42,10 +69,29 @@ function Workspace({user,onSignOut}:{user:NonNullable<ReturnType<typeof useSessi
   return()=>{disposed=true;clearTimeout(timer);disconnect();};
  },[user.role]);
  const apiOnline=health?.status==="ok";
- return <div className="app-shell"><a className="skip-link" href="#workspace-content" onClick={event=>{event.preventDefault();document.getElementById("workspace-content")?.focus();}}>Đi đến nội dung</a>
+ return <div className={`app-shell${compactNav ? " nav-compact" : ""}`}><a className="skip-link" href="#workspace-content" onClick={event=>{event.preventDefault();document.getElementById("workspace-content")?.focus();}}>Đi đến nội dung</a>
   {menuOpen&&<button className="sidebar-backdrop" aria-label="Đóng điều hướng" onClick={()=>setMenuOpen(false)}/>}
-  <Sidebar page={page} open={menuOpen} onNavigate={()=>setMenuOpen(false)} role={user.role}/>
-  <div className="workspace-shell" inert={menuOpen}><header className="workspace-topbar"><button className="menu-toggle" aria-label="Mở điều hướng" aria-expanded={menuOpen} aria-controls="workspace-sidebar" onClick={()=>setMenuOpen(!menuOpen)}>☰</button><span className="workspace-breadcrumb">Không gian làm việc <span>/</span> <strong>{info.label}</strong></span>{user.role==="ADMIN"&&<span className={`api-status ${apiOnline?'is-online':''}`} role="status"><i aria-hidden="true"/>{apiOnline?"API đã kết nối":error??"Đang kiểm tra API…"}</span>}<span className="session-user">{user.email}</span><ThemeToggle/><button className="secondary-button" disabled={signingOut} onClick={()=>{setSigningOut(true);void onSignOut().finally(()=>setSigningOut(false));}}>{signingOut?"Đăng xuất…":"Đăng xuất"}</button></header>
+  <Sidebar page={page} open={menuOpen} mobile={isMobile} onNavigate={()=>setMenuOpen(false)} role={user.role}/>
+  <div className="workspace-shell" inert={isMobile && menuOpen}>
+   <header className="workspace-topbar">
+    <button ref={menuButton} type="button" className="menu-toggle"
+     aria-label={isMobile ? "Mở điều hướng" : compactNav ? "Mở rộng điều hướng" : "Thu gọn điều hướng"}
+     title={compactNav && !isMobile ? "Mở rộng menu" : "Đóng / mở menu"}
+     aria-expanded={isMobile ? menuOpen : !compactNav} aria-controls="workspace-sidebar"
+     onClick={() => isMobile ? setMenuOpen(value => !value) : setCompactNav(value => !value)}>
+     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <span className="workspace-breadcrumb"><span className="breadcrumb-parent">Không gian làm việc <span>/</span> </span><strong>{info.label}</strong></span>
+    <div className="workspace-topbar-actions">
+     {user.role==="ADMIN"&&<span className={`api-status ${apiOnline?'is-online':''}`} role="status"><i aria-hidden="true"/>{apiOnline?"API đã kết nối":error??"Đang kiểm tra API…"}</span>}
+     <ThemeToggle/>
+     <span className="session-identity"><span className="session-avatar" aria-hidden="true">{user.email.charAt(0).toUpperCase()}</span><span className="session-user">{user.email}</span></span>
+     <button type="button" className="secondary-button signout-button" aria-label={signingOut ? "Đăng xuất…" : "Đăng xuất"} title="Đăng xuất" disabled={signingOut} onClick={()=>{setSigningOut(true);void onSignOut().finally(()=>setSigningOut(false));}}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 5H4v14h5M14 8l4 4-4 4M8 12h10"/></svg>
+      <span>{signingOut?"Đăng xuất…":"Đăng xuất"}</span>
+     </button>
+    </div>
+   </header>
    <main className="workspace-content" id="workspace-content" tabIndex={-1}><header className="page-heading" key={page}><p className="eyebrow">{info.group}</p><h1>{info.label}</h1><p>{info.description}</p></header>
     {!allowed?<section className="workspace-card access-denied" role="alert"><h2>Không có quyền truy cập</h2><p>Tài khoản của bạn không có quyền mở mục này.</p><a className="primary-action" href={`#${defaultPage(user.role)}`}>Về không gian của tôi</a></section>:
       page==="overview"||page==="monitoring"?<MonitoringPage statuses={runtimeStatuses} overview={page==="overview"}/>:page==="livewall"?<LivewallPage statuses={runtimeStatuses}/>:page==="alerts"?<AlertsPage/>:page==="cameras"?<CameraPanel runtimeStatuses={runtimeStatuses}/>:page==="people"?<FaceRegistryPanel/>:page==="history"?<RecognitionHistoryPanel/>:page==="models"?<ModelsPanel/>:page==="system"?<SystemStatus statuses={runtimeStatuses}/>:page==="accounts"||page==="classes"?<AdminManagement page={page}/>:page.startsWith("teacher/")?<TeacherWorkspace page={page}/>:<StudentWorkspace page={page}/>}</main>

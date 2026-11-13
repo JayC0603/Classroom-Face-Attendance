@@ -53,19 +53,29 @@
 @media (max-width: 1100px) { .livewall-columns-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .livewall-grid { grid-template-columns: minmax(0, 1fr); } .livewall:fullscreen { padding: 12px; } .livewall-actions { gap: 8px; } }
 .app-shell {
-  --page-bg: #f6f7f9; --panel-bg: #fff; --ink: #202b3b; --muted: #596679;
-  --line: #dce1e8; --accent: #a8440c; --control-bg: #f8f9fb;
+  --page-bg: #f5f6f8; --panel-bg: #fff; --ink: #202e40; --muted: #617084;
+  --line: #e0e5eb; --accent: #b84b13; --control-bg: #f8f9fb;
+  --accent-strong: #963a0c; --accent-soft: #fff0e5;
+  --action-fill: #b84b13; --action-hover: #963a0c; --action-ink: #fff;
+  --danger: #b32e41; --danger-soft: #fff1f2; --danger-line: #efbac2;
+  --nav-bg: #182838; --nav-ink: #bdc9d4; --nav-heading: #8fa5b7;
+  --nav-active: #2a3d4e; --nav-accent: #ffb16e;
   --warning-bg: #fff5e5; --warning-ink: #8a4c00;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
   font-size: 14px;
   background: var(--page-bg);
 }
 :root[data-theme="dark"] .app-shell {
   --page-bg: #13181f; --panel-bg: #1b222c; --ink: #edf1f7; --muted: #aebaca;
   --line: #354150; --accent: #ffb277; --control-bg: #161d26;
+  --accent-strong: #ffc79d; --accent-soft: #392b22;
+  --action-fill: #ffb277; --action-hover: #ffc79d; --action-ink: #20252d;
+  --danger: #ffb6c0; --danger-soft: #3c252d; --danger-line: #784350;
+  --nav-bg: #111e2a; --nav-ink: #bdc9d4; --nav-heading: #92a7b8;
+  --nav-active: #283a49; --nav-accent: #ffb277;
   --warning-bg: #352a1c; --warning-ink: #ffd28d;
 }
-.app-shell .workspace-sidebar { width: 248px; background: var(--page-bg); padding: 24px 12px; border-color: var(--line); box-shadow: none; }
+.app-shell .workspace-sidebar { width: 264px; background: var(--page-bg); padding: 24px 12px; border-color: var(--line); box-shadow: none; }
 .app-shell .app-brand strong { color: var(--ink); }
 .app-shell .app-brand small, .app-shell .sidebar-note, .app-shell .sidebar-note strong { color: var(--muted); }
 .app-shell .app-brand { padding: 0 12px 24px; }

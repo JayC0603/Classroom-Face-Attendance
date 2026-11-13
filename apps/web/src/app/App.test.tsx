@@ -1,4 +1,4 @@
-import {act, cleanup, render, screen, waitFor} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, expect, it, vi} from 'vitest';
 import {App} from './App';
@@ -17,6 +17,49 @@ vi.mock('../features/models/ModelsPanel',()=>({ModelsPanel:()=> <div>Model works
 const admin={user:{user_id:'admin-1',email:'admin@example.test',role:'ADMIN',person_id:null},csrf_token:'csrf'};
 const teacher={user:{user_id:'teacher-1',email:'teacher@example.test',role:'TEACHER',person_id:null},csrf_token:'csrf'};
 const student={user:{user_id:'student-1',email:'student@example.test',role:'STUDENT',person_id:'person-1'},csrf_token:'csrf'};
+
+it('collapses desktop navigation while keeping destinations accessible', async () => {
+ authMocks.getCurrentSession.mockResolvedValue(admin);
+ const user = userEvent.setup();
+ render(<App/>);
+ const toggle = await screen.findByRole('button', {name:'Thu gọn điều hướng'});
+ await user.click(toggle);
+ expect(screen.getByRole('button', {name:'Mở rộng điều hướng'}).getAttribute('aria-expanded')).toBe('false');
+ expect(document.querySelector('.app-shell')?.classList.contains('nav-compact')).toBe(true);
+ await user.click(screen.getByRole('link', {name:'Camera'}));
+ expect(await screen.findByText('Camera workspace')).toBeTruthy();
+ await user.click(screen.getByRole('button', {name:'Mở rộng điều hướng'}));
+ expect(document.querySelector('.app-shell')?.classList.contains('nav-compact')).toBe(false);
+});
+
+it('opens the mobile drawer, traps focus and closes with Escape or navigation', async () => {
+ const previousWidth = window.innerWidth;
+ Object.defineProperty(window, 'innerWidth', {configurable:true, value:390});
+ authMocks.getCurrentSession.mockResolvedValue(admin);
+ const user = userEvent.setup();
+ try {
+  render(<App/>);
+  const toggle = await screen.findByRole('button', {name:'Mở điều hướng'});
+  expect(document.getElementById('workspace-sidebar')?.hasAttribute('inert')).toBe(true);
+  await user.click(toggle);
+  const close = screen.getAllByRole('button', {name:'Đóng điều hướng'}).find(button=>button.classList.contains('sidebar-close'))!;
+  expect(document.activeElement).toBe(close);
+  expect(document.querySelector('.workspace-shell')?.hasAttribute('inert')).toBe(true);
+  expect(document.body.style.overflow).toBe('hidden');
+  await user.tab({shift:true});
+  expect(document.activeElement).toBe(screen.getByRole('link', {name:'Trạng thái hệ thống'}));
+  fireEvent.keyDown(window, {key:'Escape'});
+  expect(document.querySelector('.workspace-sidebar')?.classList.contains('is-open')).toBe(false);
+  expect(document.activeElement).toBe(toggle);
+  await user.click(toggle);
+  await user.click(screen.getByRole('link', {name:'Camera'}));
+  expect(await screen.findByText('Camera workspace')).toBeTruthy();
+  expect(document.querySelector('.workspace-sidebar')?.classList.contains('is-open')).toBe(false);
+  expect(document.body.style.overflow).toBe('');
+ } finally {
+  Object.defineProperty(window, 'innerWidth', {configurable:true, value:previousWidth});
+ }
+});
 afterEach(()=>{cleanup();window.history.replaceState(null,'','/');localStorage.clear();document.documentElement.removeAttribute('data-theme');vi.clearAllMocks();authMocks.getCurrentSession.mockResolvedValue(admin);});
 
 it('shows sign in only when anonymous and opens no admin data stream',async()=>{authMocks.getCurrentSession.mockRejectedValue(new Error('AUTH_REQUIRED'));render(<App/>);expect(await screen.findByRole('heading',{name:'\u0110\u0103ng nh\u1eadp'})).toBeTruthy();expect(screen.queryByRole('navigation')).toBeNull();expect(disconnect).not.toHaveBeenCalled();});

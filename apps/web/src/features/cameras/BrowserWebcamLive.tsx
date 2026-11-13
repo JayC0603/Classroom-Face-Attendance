@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { sendBrowserFrame, startBrowserSession, stopBrowserSession } from "../../api/browserCamera";
 import type { CameraPublic } from "../../api/contracts";
@@ -14,6 +14,48 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
   const [phase, setPhase] = useState<"off" | "opening" | "live">("off");
   const [sent, setSent] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const deviceSelectId = useId();
+  const deviceScan = useRef(0);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+
+  const refreshDevices = useCallback(async (requestPermission = false) => {
+    const scan = ++deviceScan.current;
+    setScanning(true); setDeviceError(null);
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices || window.isSecureContext === false) {
+        throw new Error("Chọn webcam cần địa chỉ localhost hoặc HTTPS và trình duyệt hỗ trợ camera.");
+      }
+      if (requestPermission) {
+        const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        permissionStream.getTracks().forEach(track => track.stop());
+        if (scan !== deviceScan.current) return;
+      }
+      const available = await navigator.mediaDevices.enumerateDevices();
+      if (scan !== deviceScan.current) return;
+      setDevices(available.filter(device => device.kind === "videoinput" && device.deviceId));
+    } catch (reason) {
+      if (scan !== deviceScan.current) return;
+      setDeviceError(reason instanceof DOMException && reason.name === "NotAllowedError"
+        ? "Hãy cho phép truy cập camera trong trình duyệt rồi làm mới danh sách."
+        : reason instanceof Error ? reason.message : "Không đọc được danh sách webcam.");
+    } finally {
+      if (scan === deviceScan.current) setScanning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setDeviceId("");
+    void refreshDevices();
+    const changed = () => { void refreshDevices(); };
+    navigator.mediaDevices?.addEventListener?.("devicechange", changed);
+    return () => {
+      deviceScan.current += 1;
+      navigator.mediaDevices?.removeEventListener?.("devicechange", changed);
+    };
+  }, [camera.id, refreshDevices]);
 
   const release = useCallback(() => {
     generation.current += 1;
@@ -55,10 +97,15 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
       await cleanupPromise.current;
       if (request !== generation.current) return;
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
+        video: {
+          ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" }),
+          width: { ideal: 1280 }, height: { ideal: 720 },
+          frameRate: { ideal: Math.max(1, Math.min(30, camera.display_fps ?? 15)) }
+        }, audio: false
       });
       if (request !== generation.current) { stream.getTracks().forEach(track => track.stop()); return; }
       media.current = stream;
+      void refreshDevices();
       stream.getTracks().forEach(track => track.addEventListener("ended", () => {
         if (request !== generation.current) return;
         stop(); setError("Webcam đã ngắt kết nối. Hãy bắt đầu lại để tiếp tục.");
@@ -74,10 +121,11 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
       session.current = { cameraId: camera.id, token: created.token };
       setPhase("live");
       const canvas = document.createElement("canvas");
-      const interval = 1000 / Math.max(1, Math.min(10, camera.sampling_fps));
+      const interval = 1000 / Math.max(1, Math.min(30, camera.display_fps ?? 15));
 
       const sendNext = async () => {
         if (request !== generation.current) return;
+        const started = performance.now();
         const element = video.current;
         try {
           if (element?.videoWidth && element.videoHeight) {
@@ -96,7 +144,7 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
             upload.current = null;
             setSent(value => value + 1);
           }
-          if (request === generation.current) timer.current = setTimeout(() => { void sendNext(); }, interval);
+          if (request === generation.current) timer.current = setTimeout(() => { void sendNext(); }, Math.max(0, interval - (performance.now() - started)));
         } catch (reason) {
           if (request !== generation.current) return;
           stop();
@@ -109,6 +157,8 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
       stop();
       setError(reason instanceof DOMException && reason.name === "NotAllowedError"
         ? "Chưa được cấp quyền camera. Hãy cho phép webcam trong trình duyệt rồi thử lại."
+        : reason instanceof DOMException && ["NotFoundError", "OverconstrainedError"].includes(reason.name)
+          ? "Không tìm thấy webcam đã chọn. Hãy kết nối lại thiết bị, làm mới danh sách và chọn webcam khác."
         : reason instanceof Error ? reason.message : "Không mở được webcam.");
     }
   }
@@ -116,9 +166,25 @@ export function BrowserWebcamLive({ camera }: { camera: CameraPublic }) {
   const allowed = camera.source_type === "webcam" && camera.enabled && camera.lifecycle === "ACTIVE";
   return (
     <div className="browser-webcam-live">
-      <p>Webcam của trình duyệt · Tối đa {Math.min(10, camera.sampling_fps)} FPS</p>
+      <p>Webcam của trình duyệt · Truyền hình tối đa {Math.max(1, Math.min(30, camera.display_fps ?? 15))} FPS · Sampling worker {camera.sampling_fps} FPS</p>
+      <label htmlFor={deviceSelectId}>Thiết bị webcam / DroidCam</label>
+      <select id={deviceSelectId} value={deviceId} disabled={phase !== "off" || scanning}
+        onChange={event => setDeviceId(event.target.value)}>
+        <option value="">Webcam mặc định của trình duyệt</option>
+        {deviceId && !devices.some(device => device.deviceId === deviceId)
+          && <option value={deviceId}>Thiết bị đã ngắt kết nối</option>}
+        {devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>
+          {device.label || `Webcam ${index + 1}`}
+        </option>)}
+      </select>
+      <button type="button" disabled={phase !== "off" || scanning}
+        onClick={() => { void refreshDevices(true); }}>Cấp quyền / làm mới webcam</button>
+      {scanning && <p role="status">Đang tìm thiết bị webcam…</p>}
+      <p className="registry-help">Kết nối DroidCam trên Windows, sau đó làm mới và chọn thiết bị cho từng camera.
+        Dừng realtime trước khi đổi thiết bị. Nếu dùng nhiều điện thoại, mỗi nguồn cần xuất hiện riêng trong trình duyệt.</p>
+      {deviceError && <p role="alert" className="registry-error">{deviceError}</p>}
       {!allowed && <p>Kích hoạt camera trước khi bắt đầu realtime.</p>}
-      {phase === "off" ? <button type="button" disabled={!allowed} onClick={start}>Bắt đầu realtime</button>
+      {phase === "off" ? <button type="button" className="button-primary" disabled={!allowed || scanning} onClick={start}>Bắt đầu realtime</button>
         : <button type="button" onClick={stop}>Dừng realtime</button>}
       {phase === "opening" && <p role="status">Đang kết nối webcam…</p>}
       <video ref={video} aria-label={`Webcam realtime ${camera.name}`} autoPlay muted playsInline hidden={phase !== "live"} />

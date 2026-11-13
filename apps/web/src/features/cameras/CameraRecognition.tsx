@@ -27,6 +27,7 @@ export function CameraRecognition({camera, roiPolygon, onRoiChange, roiEditing =
     let controller: AbortController | null = null;
     async function poll() {
       if (disposed) return;
+      const started = performance.now();
       if (document.visibilityState === 'hidden') {
         setResult(null);
         timer = setTimeout(() => void poll(), 1000);
@@ -45,12 +46,13 @@ export function CameraRecognition({camera, roiPolygon, onRoiChange, roiEditing =
         if (!disposed) {setResult(null); setError('Mất kết nối nhận diện. Đang thử lại…');}
       } finally {
         clearTimeout(timeout); controller = null;
-        if (!disposed) timer = setTimeout(() => void poll(), compact ? 500 : 200);
+        const interval = 1000 / Math.max(1, Math.min(30, camera.sampling_fps ?? 5));
+        if (!disposed) timer = setTimeout(() => void poll(), Math.max(0, interval - (performance.now() - started)));
       }
     }
     void poll();
     return () => {disposed = true; clearTimeout(timer); clearTimeout(expiry); controller?.abort();};
-  }, [camera.id, camera.revision, active, compact]);
+  }, [camera.id, camera.revision, camera.sampling_fps, active, compact]);
 
 
   if (!active) return <div className="inactive-camera-preview">

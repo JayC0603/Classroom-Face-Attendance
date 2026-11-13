@@ -24,6 +24,7 @@ export function WorkerCameraPreview({ camera }: { camera: CameraPublic }) {
 
     async function poll() {
       if (disposed) return;
+      const started = performance.now();
       if (document.visibilityState === 'hidden') {
         clearImage();
         timer = setTimeout(() => void poll(), 500);
@@ -38,7 +39,7 @@ export function WorkerCameraPreview({ camera }: { camera: CameraPublic }) {
         if (frame) {
           currentUrl = URL.createObjectURL(frame);
           setImage(currentUrl);
-          setMessage('Hình trực tiếp từ worker · xem trước tối đa 5 FPS');
+          setMessage(`Hình trực tiếp từ worker · xem trước tối đa ${camera.display_fps ?? 15} FPS`);
         } else {
           setMessage('Đang chờ hình từ worker…');
         }
@@ -50,7 +51,8 @@ export function WorkerCameraPreview({ camera }: { camera: CameraPublic }) {
       } finally {
         clearTimeout(timeout);
         request = null;
-        if (!disposed) timer = setTimeout(() => void poll(), 200);
+        const interval = 1000 / Math.max(1, Math.min(30, camera.display_fps ?? 15));
+        if (!disposed) timer = setTimeout(() => void poll(), Math.max(0, interval - (performance.now() - started)));
       }
     }
 
@@ -61,7 +63,7 @@ export function WorkerCameraPreview({ camera }: { camera: CameraPublic }) {
       request?.abort();
       clearImage();
     };
-  }, [camera.id, camera.revision, active]);
+  }, [camera.id, camera.revision, camera.display_fps, active]);
 
   if (!active) return null;
   return <figure className="worker-camera-preview">

@@ -619,7 +619,7 @@ dd {
 .student-image-grid img,.review-card img { display: block; width: 100%; max-width: 280px; aspect-ratio: 4/3; object-fit: cover; border: 1px solid #e0e6ef; border-radius: 12px; background: #f1f4f8; }
 .student-image-grid h3 { overflow-wrap: anywhere; }.status-chip { display: inline-flex; padding: 5px 9px; border: 1px solid #dce5f5; border-radius: 999px; color: #3d5d9f !important; background: #f2f6ff; font-size: 12px; font-weight: 700; }
 .upload-results { margin-top: 12px; padding: 8px 12px; border-radius: 10px; background: #f4f7fc; }.upload-results p { margin: 5px 0; }
-.primary-action { display: inline-flex !important; width: max-content; align-items: center; padding: 11px 15px; border-radius: 9px; color: white !important; background: #315fcb; font-size: 13px !important; font-weight: 700; cursor: pointer; }
+.primary-action { display: inline-flex !important; width: max-content; align-items: center; padding: 11px 15px; border-radius: 9px; color: white; background: #315fcb; font-size: 13px !important; font-weight: 700; cursor: pointer; }
 .primary-action:hover { background: #254ea9; }.access-denied { max-width: 640px; }.access-denied h2 { margin-top: 0; }
 .review-card { display: flex; align-items: flex-start; gap: 20px; }.review-card h3 { margin-top: 0; }
 @media(max-width:700px){.workspace-topbar{flex-wrap:wrap}.session-user{display:none}.role-workspace .session-row{align-items:flex-start;flex-direction:column}.review-card{flex-direction:column}.login-page{padding:18px}}
